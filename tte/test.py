@@ -1,7 +1,6 @@
-from sksurv.datasets import load_gbsg2
-from lifelines.datasets import load_rossi, load_kidney_transplant
+import pandas as pd
 
+from tte import utils
 
-df = load_kidney_transplant()
-
-print(df.isna().sum())
+df = pd.read_csv(f"{utils.get_project_root()}/data/hk_covid.csv")
+print(df)
