@@ -131,6 +131,5 @@ dmypy.json
 results/
 archive/
 examples/
-data/
 papers/
 .vscode/
