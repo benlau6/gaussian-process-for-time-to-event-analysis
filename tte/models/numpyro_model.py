@@ -276,7 +276,7 @@ if __name__ == '__main__':
     rng_key = random.PRNGKey(seed_num)
 
 
-    model_instance = LogLogisticChainedGPModel()
+    model_instance = LogLogisticModel()
     subsample = True
     subsample_size = 100
     num_warmup_mcmc = 5000
