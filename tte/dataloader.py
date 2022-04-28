@@ -6,7 +6,7 @@ from pathlib import Path
 import statsmodels.api as sm
 import pandas as pd
 import numpy as np
-from lifelines.datasets import load_rossi
+from lifelines.datasets import load_rossi, load_regression_dataset
 from rich import print
 
 from tte import utils
@@ -21,7 +21,7 @@ class Dataloader(Protocol):
 
 
 class LinelifesDataloader(Dataloader):
-    _dataset_factories = {"rossi": load_rossi}
+    _dataset_factories = {"rossi": load_rossi, 'synthetic': load_regression_dataset}
 
     def load_data(self, name) -> Any:
         if name not in self._dataset_factories:
@@ -31,7 +31,7 @@ class LinelifesDataloader(Dataloader):
 
 
 class StatsmodelsSurvivalDataloader(Dataloader):
-    _dataset_packages = {"cancer": "survival", "mastectomy": "HSAUR", "heart": "survival"}
+    _dataset_packages = {"cancer": "survival"}
 
     def load_data(self, name) -> Any:
         if name not in self._dataset_packages:
@@ -58,7 +58,10 @@ all_dataloader = AllDataloader(dataloaders=[LinelifesDataloader(), StatsmodelsSu
 
 
 dataset_map = {
-    'cancer': ['status', 'time', ["sex", "age"], 2]
+    'cancer': ['status', 'time', ["sex", "age"], 2],
+    'transplant': ['death', 'time', ['age', 'black_male', 'white_male', 'black_female'], 1],
+    'rossi': ['arrest', 'week', ['fin', 'age', 'race', 'wexp', 'mar', 'paro', 'prio'], 1],
+    'synthetic': ['E', 'T', ['var1', 'var2', 'var3'], 1]
 }
 
 def get_sample(dataset_name="cancer"):
@@ -73,7 +76,7 @@ def get_sample(dataset_name="cancer"):
 
 
 def main():
-    dataset_name = 'cancer'
+    dataset_name = 'heart'
     dataloader = all_dataloader
     df = dataloader.load_data(dataset_name)
     print(df)

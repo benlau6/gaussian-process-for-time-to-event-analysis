@@ -1,15 +1,7 @@
-from jax import numpy as jnp
-import numpy as np
+from sksurv.datasets import load_gbsg2
+from lifelines.datasets import load_rossi, load_kidney_transplant
 
-a = jnp.array([0, 1, 2, 3])
-b = jnp.array([3, 4])
-c = b
 
-print(a.shape)
-print(b.shape)
-print(b[:, None].shape)
-print(b[:, None].T.shape)
+df = load_kidney_transplant()
 
-print(b)
-print(b[:, None])
-print(b[:, None].T)
+print(df.isna().sum())

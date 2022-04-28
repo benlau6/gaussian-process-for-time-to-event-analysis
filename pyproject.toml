@@ -18,9 +18,10 @@ arviz = "0.12.0"
 jax = "^0.3.4"
 graphviz = "^0.19.1"
 numpyro = {version = "^0.9.1", extras = ["cpu"]}
-tinygp = "^0.2.0"
+tinygp = "0.2.2"
 jupyterlab = {version = "^3.3.2", extras = ["dev"]}
 scikit-learn = "^1.0.2"
+scikit-survival = "^0.17.2"
 
 [tool.poetry.dev-dependencies]
 mypy = "^0.931"

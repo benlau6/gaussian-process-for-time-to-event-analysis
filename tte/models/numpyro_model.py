@@ -1,4 +1,5 @@
 import functools
+from timeit import default_timer as timer
 
 import numpy as np
 import pandas as pd
@@ -12,8 +13,8 @@ from numpyro.infer import MCMC, NUTS, Predictive
 import arviz as az
 import matplotlib.pyplot as plt
 from lifelines.utils import concordance_index
-from lifelines import KaplanMeierFitter
-from sklearn.model_selection import train_test_split
+from sksurv.metrics import brier_score
+from sksurv.util import Surv
 
 from tte import utils
 from tte.dataloader import get_sample, dataset_map
@@ -76,7 +77,7 @@ class LogLogisticModel(SurvivalModel):
     _model_name = 'Log-Logistic AFT'
     _model_shortname = 'll'
 
-    def model(self, X, y=None, X_cens=None, y_cens=None, gp_cond=None):
+    def model(self, X, y=None, X_cens=None, y_cens=None, **kwargs):
         # add constant to X as a baseline, take log on y for modelling log logistic
         preprocessing_ = functools.partial(
             preprocessing, X_func=X_add_constant, y_func=jnp.log
@@ -105,7 +106,7 @@ class LogLogisticModel(SurvivalModel):
         X_ = X_add_constant(X)
         return jsp.stats.logistic.sf((jnp.log1p(ts) - (loc @ X_.T).T) / scale)
 
-    def sfs(self, idata, ts, X):
+    def sfs(self, idata, ts, X, loc=None, scale=None):
         loc = idata.posterior["loc"].mean(dim=("chain", "draw")).data
         scale = idata.posterior["scale"].mean(dim=("chain", "draw")).data
         sfs = self.sf(ts, X, loc, scale)
@@ -123,7 +124,7 @@ class LogLogisticGPModel(SurvivalModel):
     _model_name = 'Log-Logistic GP'
     _model_shortname = 'llgp'
 
-    def model(self, X, y=None, X_cens=None, y_cens=None, gp_cond=None):
+    def model(self, X, y=None, X_cens=None, y_cens=None, **kwargs):
         # take log on y for modelling log logistic
         preprocessing_ = functools.partial(
             preprocessing, X_func=None, y_func=jnp.log
@@ -140,12 +141,12 @@ class LogLogisticGPModel(SurvivalModel):
             X_ = X
 
         # The parameters of the GP model
-        noise_gp = numpyro.sample("noise_gp", dist.HalfNormal(1.0))
         rho = numpyro.sample("rho", dist.HalfNormal(10.0))
+        noise_gp = numpyro.sample("noise_gp", dist.HalfNormal(1.0))
 
-        if gp_cond is not None:
+        if 'gp_cond' in kwargs:
             # prediction
-            loc = numpyro.deterministic("loc", gp_cond.gp.mean)
+            loc = numpyro.deterministic("loc", kwargs['gp_cond'].gp.mean)
         else:
             gp = build_gp(rho, noise_gp, X_)
             loc = numpyro.sample("loc", gp.numpyro_dist())
@@ -167,11 +168,13 @@ class LogLogisticGPModel(SurvivalModel):
     def sf(self, ts, loc, scale):
         return jsp.stats.logistic.sf((jnp.log1p(ts) - loc) / scale)
 
-    def sfs(self, idata, ts, X=None):
-        locs = idata.posterior["loc"].mean(dim=("chain", "draw")).data
-        scale = idata.posterior["scale"].mean(dim=("chain", "draw")).data
+    def sfs(self, idata, ts, X=None, loc=None, scale=None):
+        if loc is None:
+            loc = idata.posterior["loc"].mean(dim=("chain", "draw")).data
+        if scale is None:
+            scale = idata.posterior["scale"].mean(dim=("chain", "draw")).data
 
-        sfs = self.sf(ts, locs[:, jnp.newaxis], scale)
+        sfs = self.sf(ts, loc[:, jnp.newaxis], scale)
         return sfs
 
 
@@ -179,7 +182,7 @@ class LogLogisticChainedGPModel(SurvivalModel):
     _model_name = 'Log-Logistic Chained GP'
     _model_shortname = 'llcgp'
 
-    def model(self, X, y=None, X_cens=None, y_cens=None):
+    def model(self, X, y=None, X_cens=None, y_cens=None, **kwargs):
         # take log on y for modelling log logistic
         preprocessing_ = functools.partial(
             preprocessing, X_func=None, y_func=jnp.log
@@ -196,33 +199,32 @@ class LogLogisticChainedGPModel(SurvivalModel):
             X_ = X
 
         # The parameters of the GP model
-        noise_gp1 = numpyro.sample("noise_gp1", dist.HalfNormal(1.0))
         rho1 = numpyro.sample("rho1", dist.HalfNormal(10.0))
-        kernel1 = kernels.Matern52(rho1)
+        noise_gp1 = numpyro.sample("noise_gp1", dist.HalfNormal(1.0))
 
-        gp1 = GaussianProcess(
-            kernel1,
-            X_,
-            diag=noise_gp1,
-        )
+        if 'gp_cond1' in kwargs:
+            # prediction
+            loc = numpyro.deterministic("loc", kwargs['gp_cond1'].gp.mean)
+        else:
+            gp1 = build_gp(rho1, noise_gp1, X_)
+            loc = numpyro.sample("loc", gp1.numpyro_dist())
 
         # second gp
-        noise_gp2 = numpyro.sample("noise_gp2", dist.HalfNormal(1.0))
         rho2 = numpyro.sample("rho2", dist.HalfNormal(10.0))
-        kernel2 = kernels.Matern52(rho2)
-        gp2 = GaussianProcess(
-            noise_gp2**2*kernel2,
-            X_,
-            diag=noise_gp2,
-        )
+        noise_gp2 = numpyro.sample("noise_gp2", dist.HalfNormal(1.0))
+
+        if 'gp_cond2' in kwargs:
+            # prediction
+            log_scale = numpyro.deterministic("log_scale", kwargs['gp_cond2'].gp.mean)
+        else:
+            gp2 = build_gp(rho2, noise_gp2, X_)
+            log_scale = numpyro.sample("log_scale", gp2.numpyro_dist())
 
         # This parameter has shape (num_data,)
-        loc = numpyro.sample("loc", gp1.numpyro_dist())
         loc1 = loc[: X.shape[0]]
         loc2 = loc[X.shape[0] :]
 
         # It will take exponential to ensure positivity
-        log_scale = numpyro.sample("log_scale", gp2.numpyro_dist())
         log_scale1 = log_scale[: X.shape[0]]
         log_scale2 = log_scale[X.shape[0] :]
 
@@ -239,11 +241,13 @@ class LogLogisticChainedGPModel(SurvivalModel):
     def sf(self, ts, loc, scale):
         return jsp.stats.logistic.sf((jnp.log1p(ts) - loc) / jnp.exp(scale))
 
-    def sfs(self, idata, ts, X=None):
-        locs = idata.posterior["loc"].mean(dim=("chain", "draw")).data
-        log_scales = idata.posterior["log_scale"].mean(dim=("chain", "draw")).data
+    def sfs(self, idata, ts, X=None, loc=None, scale=None):
+        if loc is None:
+            loc = idata.posterior["loc"].mean(dim=("chain", "draw")).data
+        if scale is None:
+            scale = idata.posterior["log_scale"].mean(dim=("chain", "draw")).data
 
-        sfs = self.sf(ts, locs[:, jnp.newaxis], log_scales[:, jnp.newaxis])
+        sfs = self.sf(ts, loc[:, jnp.newaxis], scale[:, jnp.newaxis])
         return sfs
 
 
@@ -255,13 +259,6 @@ def df2arr(df, event_col, duration_col, covariate_cols, event_val):
     X_cens = df.loc[df[event_col] != event_val, covariate_cols].to_numpy()
     y_cens = df.loc[df[event_col] != event_val, duration_col].to_numpy()
     return X, y, X_cens, y_cens
-
-def km_estimate(y_true, events):
-    kmf = KaplanMeierFitter()
-    kmf.fit(y_true, events)
-    sf = kmf.survival_function_
-    print(sf)
-    exit()
 
 def combine_y(y, y_cens):
     return jnp.concatenate([y, y_cens])
@@ -277,25 +274,25 @@ if __name__ == '__main__':
     numpyro.set_host_device_count(4)
     seed_num = 0
     rng_key = random.PRNGKey(seed_num)
-    model_instance = LogLogisticGPModel()
+
+
+    model_instance = LogLogisticChainedGPModel()
     subsample = True
-    subsample_size = 50
-    num_warmup_mcmc = 10000
-    num_samples_mcmc = 10000
+    subsample_size = 100
+    num_warmup_mcmc = 5000
+    num_samples_mcmc = 5000
     render_model = False
     only_render = False
 
-    dataset_name = 'cancer'
+    # cancer, rossi, synthetic
+    dataset_name = 'synthetic'
     event_col, duration_col, covariate_cols, event_val = dataset_map[dataset_name]
 
     df = get_sample(dataset_name)
     if subsample:
         df = df.sample(subsample_size, random_state=rng_key)
-    df, df_test = train_test_split(df, test_size=0.5, random_state=seed_num)
 
     X, y, X_cens, y_cens = df2arr(df, event_col, duration_col, covariate_cols, event_val)
-
-    km_estimate(combine_y(y, y_cens), get_events(y, y_cens))
 
     # for later plotting survival curve
     covariates = np.vstack([X, X_cens])
@@ -318,10 +315,13 @@ if __name__ == '__main__':
         num_warmup=num_warmup_mcmc,
         num_samples=num_samples_mcmc,
         num_chains=4,
-        progress_bar=False,
+        progress_bar=True,
     )
+    start = timer()
     mcmc.run(rng_key, X=X, y=y, X_cens=X_cens, y_cens=y_cens)
-    mcmc.print_summary()  # doctest: +SKIP
+    end = timer()
+    print(f"Sampling time: {end - start}s")
+    #mcmc.print_summary()
     samples = mcmc.get_samples()
 
     # MCMC sampling trace
@@ -333,7 +333,7 @@ if __name__ == '__main__':
 
     # Survival Plot
 
-    ts = np.linspace(0, 1000, 10000)
+    ts = np.linspace(0, y.max(), 10000)
 
     fig, ax = plt.subplots(figsize=(8, 6))
 
@@ -341,8 +341,11 @@ if __name__ == '__main__':
 
     for covariate, sf in zip(covariates, sfs):
         model_instance.plot_sf(covariate, sf)
-    ax.legend()
-    #plt.show()
+
+    if len(sfs) < 10:
+        ax.legend()
+    ax.set_title(model_instance._model_name)
+    plt.show()
 
     # testing
     def get_y_pred(predictions):
@@ -360,27 +363,54 @@ if __name__ == '__main__':
         df['event'] = event_values
         return df
 
-    X, y, X_cens, y_cens = df2arr(df_test, event_col, duration_col, covariate_cols, event_val)
+    X, y, X_cens, y_cens = df2arr(df, event_col, duration_col, covariate_cols, event_val)
     event_values = [*[1]*len(y), *[0]*len(y_cens)]
     X_ = jnp.vstack([X, X_cens])
     y_true = np.concatenate([y, y_cens])
 
     # build gp
-    if isinstance(model_instance, (LogLogisticGPModel, LogLogisticChainedGPModel)):
+    gp_cond = None
+    gp_cond1 = None
+    gp_cond2 = None
+    loc_cond = None
+    scale_cond = None
+    if isinstance(model_instance, LogLogisticGPModel):
         post_loc = jnp.mean(samples['loc'], axis=0)
         post_rho = jnp.mean(samples['rho'], axis=0)
         post_noise_gp = jnp.mean(samples['noise_gp'], axis=0)
         gp = build_gp(post_rho, post_noise_gp, covariates)
         gp_cond = gp.condition(post_loc, X_)
-    else:
-        gp_cond = None
+        loc_cond = gp_cond.gp.mean
+    elif isinstance(model_instance, LogLogisticChainedGPModel):
+        post_loc = jnp.mean(samples['loc'], axis=0)
+        post_rho1 = jnp.mean(samples['rho1'], axis=0)
+        post_noise_gp1 = jnp.mean(samples['noise_gp2'], axis=0)
+
+        post_log_scale = jnp.mean(samples['log_scale'], axis=0)
+        post_rho2 = jnp.mean(samples['rho2'], axis=0)
+        post_noise_gp2 = jnp.mean(samples['noise_gp2'], axis=0)
+
+        gp1 = build_gp(post_rho1, post_noise_gp1, covariates)
+        gp_cond1 = gp1.condition(post_loc, X_)
+        loc_cond = gp_cond1.gp.mean
+
+        gp2 = build_gp(post_rho2, post_noise_gp2, covariates)
+        gp_cond2 = gp2.condition(post_log_scale, X_)
+        scale_cond = gp_cond2.gp.mean
+
 
     predictive = Predictive(model_instance.model, samples)
-    predictions = predictive(rng_key, X=X_, gp_cond=gp_cond)["obs"]
+    predictions = predictive(rng_key, X=X_, gp_cond=gp_cond, gp_cond1=gp_cond1, gp_cond2=gp_cond2)["obs"]
     y_pred = get_y_pred(predictions)
     df = combine_y_result(y_true, y_pred, event_values)
-    print(df)
+    # print(df)
 
     c_index = concordance_index(df['true'], df['pred'], df['event'])
-    print(c_index)
+    survival_test = Surv.from_dataframe('event', 'true', df)
 
+    ts = np.linspace(y_true.min()+1, y_true.max()-1, 5)
+    pred_sf = model_instance.sfs(idata, ts, X=X_, loc=loc_cond, scale=scale_cond)
+
+    b_score = brier_score(survival_test, survival_test, pred_sf, np.linspace(y_true.min()+1, y_true.max()-1, 5))
+    print(f"{c_index:.3f}")
+    print(b_score[1].round(3))
