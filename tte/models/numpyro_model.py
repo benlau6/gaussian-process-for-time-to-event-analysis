@@ -13,8 +13,8 @@ from numpyro.infer import MCMC, NUTS, Predictive
 import arviz as az
 import matplotlib.pyplot as plt
 from lifelines.utils import concordance_index
-from sksurv.metrics import brier_score
-from sksurv.util import Surv
+#from sksurv.metrics import brier_score
+#from sksurv.util import Surv
 
 from tte import utils
 from tte.dataloader import get_sample, dataset_map
@@ -276,16 +276,16 @@ if __name__ == '__main__':
     rng_key = random.PRNGKey(seed_num)
 
 
-    model_instance = LogLogisticModel()
+    model_instance = LogLogisticGPModel()
     subsample = True
-    subsample_size = 100
+    subsample_size = 20
     num_warmup_mcmc = 5000
     num_samples_mcmc = 5000
     render_model = False
     only_render = False
 
-    # cancer, rossi, synthetic
-    dataset_name = 'synthetic'
+    # cancer, rossi, synthetic, covid
+    dataset_name = 'covid'
     event_col, duration_col, covariate_cols, event_val = dataset_map[dataset_name]
 
     df = get_sample(dataset_name)
@@ -321,7 +321,7 @@ if __name__ == '__main__':
     mcmc.run(rng_key, X=X, y=y, X_cens=X_cens, y_cens=y_cens)
     end = timer()
     print(f"Sampling time: {end - start}s")
-    #mcmc.print_summary()
+    mcmc.print_summary()
     samples = mcmc.get_samples()
 
     # MCMC sampling trace
@@ -403,14 +403,14 @@ if __name__ == '__main__':
     predictions = predictive(rng_key, X=X_, gp_cond=gp_cond, gp_cond1=gp_cond1, gp_cond2=gp_cond2)["obs"]
     y_pred = get_y_pred(predictions)
     df = combine_y_result(y_true, y_pred, event_values)
-    # print(df)
+    print(df)
 
     c_index = concordance_index(df['true'], df['pred'], df['event'])
-    survival_test = Surv.from_dataframe('event', 'true', df)
+    #survival_test = Surv.from_dataframe('event', 'true', df)
 
     ts = np.linspace(y_true.min()+1, y_true.max()-1, 5)
     pred_sf = model_instance.sfs(idata, ts, X=X_, loc=loc_cond, scale=scale_cond)
 
-    b_score = brier_score(survival_test, survival_test, pred_sf, np.linspace(y_true.min()+1, y_true.max()-1, 5))
+    #b_score = brier_score(survival_test, survival_test, pred_sf, np.linspace(y_true.min()+1, y_true.max()-1, 5))
     print(f"{c_index:.3f}")
-    print(b_score[1].round(3))
+    #print(b_score[1].round(3))

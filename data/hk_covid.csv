@@ -1,4 +1,4 @@
-Case no.,Report date,Date of onset,Gender,Age,Name of hospital admitted,Hospitalised/Discharged/Deceased,HK/Non-HK resident,Classification*,Case status*
+Case no.,Report date,Date of onset,gender,age,dummy1,status,residentship,dummy3,dummy2
 1,23/01/2020,21/01/2020,M,39,,Discharged,Non-HK resident,Imported case,Confirmed
 2,23/01/2020,18/01/2020,M,56,,Discharged,HK resident,Imported case,Confirmed
 3,24/01/2020,20/01/2020,F,62,,Discharged,Non-HK resident,Imported case,Confirmed
